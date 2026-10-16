@@ -61,6 +61,9 @@ provides:
     interface: landscape-debarchive
   task-handler:
     interface: landscape-task-handler
+  mcp:
+    interface: landscape-mcp
+    optional: true
   data:
     interface: block-storage
     scope: container

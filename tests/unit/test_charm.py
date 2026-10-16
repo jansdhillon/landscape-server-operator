@@ -384,6 +384,87 @@ class TestDebarchiveRelation:
         assert self._debarchive_app_data(result) == {}
 
 
+class TestMcpRelation:
+    """
+    Tests for the `mcp` (landscape-mcp) relation, which only shares the
+    external Landscape hostname with the landscape-mcp charm.
+    """
+
+    def _mcp_app_data(self, state: State) -> dict:
+        for relation in state.relations:
+            if relation.endpoint == "mcp":
+                return dict(relation.local_app_data)
+        raise ValueError("No mcp relation found.")
+
+    def _stored_leader_ip(self, leader_ip: str) -> StoredState:
+        return StoredState(
+            owner_path="LandscapeServerCharm",
+            content={"leader_ip": leader_ip},
+        )
+
+    def test_publishes_hostname_from_root_url(self):
+        """The root_url hostname is published, and nothing else."""
+        context = Context(LandscapeServerCharm)
+        relation = Relation("mcp")
+        state = State(
+            leader=True,
+            relations=[relation],
+            config={"root_url": "https://landscape.example.com/"},
+            stored_states=[self._stored_leader_ip("10.0.0.1")],
+        )
+
+        result = context.run(context.on.relation_joined(relation), state)
+
+        assert self._mcp_app_data(result) == {"hostname": "landscape.example.com"}
+
+    def test_falls_back_to_leader_ip(self):
+        """Without root_url, the leader IP is published, as on debarchive."""
+        context = Context(LandscapeServerCharm)
+        relation = Relation("mcp")
+        state = State(
+            leader=True,
+            relations=[relation],
+            stored_states=[self._stored_leader_ip("10.0.0.1")],
+        )
+
+        result = context.run(context.on.relation_joined(relation), state)
+
+        assert self._mcp_app_data(result) == {"hostname": "10.0.0.1"}
+
+    def test_non_leader_does_not_publish(self):
+        """Non-leader units never write to the relation app databag."""
+        context = Context(LandscapeServerCharm)
+        relation = Relation("mcp")
+        state = State(
+            leader=False,
+            relations=[relation],
+            config={"root_url": "https://landscape.example.com/"},
+        )
+
+        result = context.run(context.on.relation_joined(relation), state)
+
+        assert self._mcp_app_data(result) == {}
+
+    def test_config_changed_republishes_hostname(self):
+        """Changing root_url updates the hostname on existing relations."""
+        context = Context(LandscapeServerCharm)
+        relation = Relation("mcp", local_app_data={"hostname": "old.example.com"})
+        state = State(
+            leader=True,
+            relations=[relation],
+            config={
+                "root_url": "https://new.example.com/",
+                "secret_token": "s3cr3t",
+                "cookie_encryption_key": "cookie-key",
+            },
+            stored_states=[self._stored_leader_ip("10.0.0.1")],
+        )
+
+        result = context.run(context.on.config_changed(), state)
+
+        assert self._mcp_app_data(result) == {"hostname": "new.example.com"}
+
+
 class TestTaskHandlerRelation:
     """
     Tests for the bidirectional `task-handler` (landscape-task-handler) relation.

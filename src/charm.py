@@ -159,6 +159,7 @@ LANDSCAPE_UBUNTU_INSTALLER_ATTACH = "landscape-ubuntu-installer-attach"
 UBUNTU_INSTALLER_ATTACH_EXTERNAL_PORT = 50051
 
 TASK_HANDLER_RELATION = "task-handler"
+MCP_RELATION = "mcp"
 CERTIFICATES_RELATION = "certificates"
 OUTBOX_GRPC_CERTS_DIR = Path("/var/snap/landscape-outbox/common/grpc-certs")
 DEFAULT_STORE_NAMES = {
@@ -388,6 +389,12 @@ class LandscapeServerCharm(CharmBase):
         self.framework.observe(
             self.on.task_handler_relation_changed,
             self._on_task_handler_relation_changed,
+        )
+
+        # Landscape MCP server (interface: landscape-mcp)
+        self.framework.observe(
+            self.on.mcp_relation_joined,
+            self._update_mcp_relations,
         )
 
         # Leadership/peering
@@ -734,6 +741,7 @@ class LandscapeServerCharm(CharmBase):
             notify_secret_token_changed=bool(secret_token_changed)
         )
         self._update_task_handler_relations()
+        self._update_mcp_relations()
 
     def _set_ports(self):
         worker_counts = self.charm_config.worker_counts
@@ -2032,6 +2040,29 @@ command[check_{service}]=/usr/local/lib/nagios/plugins/check_systemd.py {service
                 hostname = parsed.hostname
         return hostname or None
 
+    def _update_mcp_relations(self, _=None) -> None:
+        """Publish the external Landscape hostname to related MCP servers.
+
+        The landscape-mcp charm uses it as its haproxy-route hostname (HAProxy
+        ignores routes without one) and as a server-certificate SAN. Only the
+        hostname is shared; the MCP server authenticates with its own API
+        credentials.
+        """
+        if not self.unit.is_leader():
+            return
+
+        relations = self.model.relations.get(MCP_RELATION, [])
+        if not relations:
+            return
+
+        hostname = self._landscape_hostname()
+        if not hostname:
+            logger.info("Skipping mcp relation update: no Landscape hostname yet")
+            return
+
+        for relation in relations:
+            relation.data[self.app]["hostname"] = hostname
+
     def _update_task_handler_relations(self) -> None:
         """Publish the task-handler relation data to related task-handler charms.
 
@@ -2226,6 +2257,7 @@ command[check_{service}]=/usr/local/lib/nagios/plugins/check_systemd.py {service
             # relations that depend on it for their root URL fallback.
             self._update_debarchive_relations()
             self._update_task_handler_relations()
+            self._update_mcp_relations()
 
         self._leader_changed()
 
